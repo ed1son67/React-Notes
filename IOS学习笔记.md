@@ -165,6 +165,28 @@ NSAutoreleasePool *pool = [NSAutoreleasePool new];
 
 自动释放池是栈的结构，新添加的pool会被push到栈顶
 
+### 异常处理
+
+```objective-c
+@try {
+
+} 
+// 捕捉错误
+@catch (NSException *exception) {
+    // 抛出错误
+    @throw exception
+} @finally {
+
+}
+```
+
+### 对象初始化
+
+发送alloc消息，会为类申请一块内存，alloc之后还需要发送init消息进行初始化。一般会这样写：
+```objective-c
+Car *car = [[Car alloc] init];
+```
+
 ## 概念
 
 ### OOP四大原则

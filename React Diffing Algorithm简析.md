@@ -282,6 +282,23 @@ fiber拥有几种状态：
 
 `output`：一个fiber的输出是一个函数的返回值，每一个fiber都有output，但只有叶子节点才会创建output，也就是`host component`，output最后会最后传递到renderer，由它根据output去更新视图。
 
+## requestIdeCallback
+
+浏览器的每一帧在执行完task、rendering和compositing之后，主线程会变得空闲，直到下一个task可以运行为止，这段空闲的时间叫idle period，requestIdleCallback这个api可以让我们利用这段时间执行一些函数。
+
+在每一个idle period中，tasks会以FIFO的顺序执行直到idle period结束或者队列清空，如果当前idle period结束后队列不是空的，还可以在后面的idle period中执行task。
+
+在下一个idle period开始的时候，新发布的idea callbacks会被添加到runnable idle callback list的末尾，这样会保证新发布的callbacks会比重新发布的callbacks先执行，执行到队列末尾之后，又会重新从队头开始遍历执行，所以这是一个环形队列的数据结构。
+
+但浏览器有可能不会有idle period，这时候callback极有可能被无限推迟，所以还提供了一个deadline选项，当超过这个时间callback还没被执行，就会被放进event loop里面等待执行。
+
+deadline的最大值是50ms，因为在100ms内处理任务用户感知不到卡顿，至少要50ms才可以满足浏览器响应用户的操作。
+
+如果在一个period中无法在deadline中完成一个callback，会重新调用一次requestIdleCallback，然后立即将控制权交还给event loop。
+
+
+
+
 
 
 

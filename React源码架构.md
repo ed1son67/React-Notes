@@ -1,4 +1,4 @@
-# React架构
+# React源码架构
 
 React16的架构分为三层：
 * Scheduler（调度器）：调度任务的优先级

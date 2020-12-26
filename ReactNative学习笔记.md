@@ -29,7 +29,7 @@ RCT_EXPORT_MODULE();
 @end
 ```
 
-如果要暴露原生方法，要使用`RCT_EXPORT_MODULE();`宏明确告诉JS可以调用的原生方法，下例中通过宏暴露了一个叫`addEvent`的方法。
+如果要暴露原生方法，要使用`RCT_EXPORT_METHOD();`宏明确告诉JS可以调用的原生方法。
 
 ```objective-c
 #import "CalendarManager.h"
@@ -39,9 +39,20 @@ RCT_EXPORT_MODULE();
 
 RCT_EXPORT_MODULE();
 
-RCT_EXPORT_METHOD(addEvent:(NSString *)name location:(NSString *)location)
-{
-  RCTLogInfo(@"Pretending to create an event %@ at %@", name, location);
+RCT_EXPORT_METHOD(callNativeMethodNoCallback:(NSString *)methodName
+                  params:(NSDictionary *)params) {
+    NSString *selectorName = [NSString stringWithFormat:@"%@:", methodName];
+    SEL selector = NSSelectorFromString(selectorName);
+    if ([self respondsToSelector:selector]) {
+        GYLOG(Log_RN, @"callNativeMethodNoCallback: %@ %@", methodName, params);
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        [self performSelector:selector withObject:params];
+        #pragma clang diagnostic pop
+    } else {
+        GYLOG_WARN(Log_RN, @"unknown methodName: %@", methodName);
+        [self callJSMethodWithSubevent:@"RNUnknownBridgeMethodEvent" params:params];
+    }
 }
 
 @end
@@ -51,10 +62,10 @@ RCT_EXPORT_METHOD(addEvent:(NSString *)name location:(NSString *)location)
 ```js
 import { NativeModules } from 'react-native';
 var CalendarManager = NativeModules.CalendarManager;
-CalendarManager.addEvent(
-  'Birthday Party',
-  '4 Privet Drive, Surrey'
-);
+
+WRRCTManager.callNativeMethodNoCallback(methodName, params);
+WRRCTManager.callNativeMethodWithCallback(methodName, params);
+
 ```
 
 当JS端调用原生方法传递参数的时候，有时候需要进行参数类型的转换，在原生端可以使用`RCTConvert`函数解决这个问题，下例中将JS的date类型转换为了OC的date类型：
@@ -155,49 +166,124 @@ console.log(CalendarManager.firstDayOfTheWeek);
 原生端可以发送事件给JS端，实现一个观察者模式，具体是将当前类继承`RCTEventEmitter`，并实现`supportedEvents`以及调用`self sendEventWithName`：
 
 ```objective-c
-// CalendarManager.h
+// WRRCTManager.h
 #import <React/RCTBridgeModule.h>
 #import <React/RCTEventEmitter.h>
 
-@interface CalendarManager : RCTEventEmitter <RCTBridgeModule>
+#define WRRCTNativeEvent @"WRRCTNativeEvent"
+
+@interface WRRCTManager : RCTEventEmitter <RCTBridgeModule>
 
 @end
 
-// CalendarManager.m
-#import "CalendarManager.h"
+// WRRCTManager.m
+#import "WRRCTManager.h"
 
-@implementation CalendarManager
+@implementation WRRCTManager
 
 RCT_EXPORT_MODULE();
 
+#pragma mark - Lifecycle
+
 - (NSArray<NSString *> *)supportedEvents
 {
-  return @[@"EventReminder"];
+  return @[WRRCTNativeEvent];
+}`
+
+// 当WRRCTManager在js端监听了一个事件，这个函数会被调用
+- (void)startObserving {
+  // 注册一个全局的通知中心去处理事件
 }
 
-- (void)calendarEventReminderReceived : (NSNotification *) notification
-{
-  NSString *eventName = notification.userInfo[@"name"];
-  // 调用sendEventWithName方法发送一个带参数的事件
-  [self sendEventWithName : @"EventReminder" body : @{@"name": eventName}];
+- (void)stopObserving {
+    hasListeners = NO;
+    // Remove upstream listeners, stop unnecessary background tasks
 }
+
+- (void)callJSMethodWithSubevent:(NSString *)subevent params:(NSDictionary *)params {
+    if (subevent.length <= 0) {
+        return;
+    }
+    NSMutableDictionary *body = [NSMutableDictionary dictionaryWithDictionary:params];
+    body[@"subevent"] = subevent;
+    // 调用sendEventWithName向JS端发送事件
+    [self sendEventWithName : WRRCTNativeEvent body:body];
+}
+
 
 @end
 ```
 
-在JS端使用`NativeEventEmitter`去监听原生发生的事件。
+在JS端使用`NativeEventEmitter`去监听原生发生的事件，原生端会调用callback或者promise
 
 ```js
 import { NativeEventEmitter, NativeModules } from 'react-native';
-const { CalendarManager } = NativeModules;
+const WRRCTManager = NativeModules.WRRCTManager;
 
-const calendarManagerEmitter = new NativeEventEmitter(CalendarManager);
+export const WRRCTNativeEvent = 'WRRCTNativeEvent';
+const AllowedEvents = [WRRCTNativeEvent];
 
-const subscription = calendarManagerEmitter.addListener(
-  'EventReminder',
-  (reminder) => console.log(reminder.name)
-);
-...
-// Don't forget to unsubscribe, typically in componentWillUnmount
-subscription.remove();
+class NativeManager {
+  constructor () {
+    this._nativeEventEmitter = new NativeEventEmitter(WRRCTManager);
+  }
+  addEventListener (eventName, handler) {
+    this._nativeEventEmitter.addEventListener(eventName, handler);
+  }
+}
+
+// 全局单例
+export default new NativeManager;
+
 ```
+
+## 桥接原生UI View
+
+原生View都是RCTViewManager的单例子类，要桥接原生view，首先要新建一个viewManager，也就是一个RCTViewManager的子类，然后添加`RCT_EXPORT_MODULE()`宏，再实现`-(UIView *) view`方法。
+
+```objective-c
+#import "WRRCTDiscoverActivityCardViewManager.h"
+#import "WRRCTDiscoverActivityCardView.h"
+
+@implementation WRRCTDiscoverActivityCardViewManager
+
+RCT_EXPORT_MODULE(WRDiscoverActivityCardView);
+
+- (UIView)view {
+  WRRCTDiscoverActivityCardViewManager *view = [[WRRCTDiscoverActivityCardView alloc] init]
+}
+
+RCT_EXPORT_VIEW_PROPERTY(cardData, NSDictionary)
+
+@end
+```
+
+JS端通过`RCT_EXPORT_VIEW_PROPERTY()`宏可以向原生端传递一些属性，底层会通过RCTConvert对数据进行转换，第二个参数指明了该属性的类型。一般会实现一个wrapper类记录property。
+
+```js
+// MapView.js
+import PropTypes from 'prop-types';
+import React from 'react';
+import { requireNativeComponent } from 'react-native';
+
+class MapView extends React.Component {
+  render() {
+    return <RNTMap {...this.props} />;
+  }
+}
+
+MapView.propTypes = {
+  /**
+   * A Boolean value that determines whether the user may use pinch
+   * gestures to zoom in and out of the map.
+   */
+  zoomEnabled: PropTypes.bool
+};
+
+var RNTMap = requireNativeComponent('RNTMap', MapView);
+
+module.exports = MapView;
+```
+
+## RN手势系统
+
